@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "manifoldbt-mcp"
+version = "0.1.0"
+description = "Model Context Protocol (MCP) server for the manifoldbt backtesting engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "ClementG91" },
+]
+keywords = [
+    "manifoldbt",
+    "backtesting",
+    "trading",
+    "quantitative-finance",
+    "mcp",
+    "model-context-protocol",
+    "llm",
+    "claude",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    "manifoldbt>=0.4.6",
+    "mcp>=1.2",
+]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.7"]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4",
+    "matplotlib>=3.7",
+]
+
+[project.scripts]
+manifoldbt-mcp = "manifoldbt_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/ClementG91/manifoldbt-mcp"
+Upstream = "https://github.com/Jimmy7892/manifoldbt"
+Issues = "https://github.com/ClementG91/manifoldbt-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/manifoldbt_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "RUF"]
+ignore = ["E501"]

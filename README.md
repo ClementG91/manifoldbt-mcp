@@ -1,8 +1,13 @@
 # manifoldbt-mcp
 
+[![CI](https://github.com/ClementG91/manifoldbt-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ClementG91/manifoldbt-mcp/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/manifoldbt-mcp.svg)](https://pypi.org/project/manifoldbt-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/manifoldbt-mcp.svg)](https://pypi.org/project/manifoldbt-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
+> Releasing to PyPI is fully automated via
+> [GitHub Actions + PyPI Trusted Publishing](./docs/RELEASING.md) — just tag
+> `vX.Y.Z` and push.
 
 > **Model Context Protocol (MCP) server for
 > [manifoldbt](https://github.com/Jimmy7892/manifoldbt)** — the Rust-powered

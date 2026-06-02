@@ -1,8 +1,8 @@
 # manifoldbt-mcp
 
 [![CI](https://github.com/ClementG91/manifoldbt-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ClementG91/manifoldbt-mcp/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/manifoldbt-mcp.svg)](https://pypi.org/project/manifoldbt-mcp/)
-[![Python](https://img.shields.io/pypi/pyversions/manifoldbt-mcp.svg)](https://pypi.org/project/manifoldbt-mcp/)
+[![PyPI](https://img.shields.io/pypi/v/manifoldbt-mcp.svg?cacheSeconds=0)](https://pypi.org/project/manifoldbt-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/manifoldbt-mcp.svg?cacheSeconds=0)](https://pypi.org/project/manifoldbt-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
 > Releasing to PyPI is fully automated via
@@ -109,7 +109,7 @@ Then connect your MCP client to `http://<host>:8765/mcp`.
 |------|---------|
 | `get_version` | Return manifoldbt version + license tier (Community / Pro). |
 | `activate_license` | Activate a Pro license key for the running process. |
-| `list_indicators_tool` | Enumerate all 45+ indicators with their Python signatures. |
+| `list_indicators` | Enumerate all 45+ indicators with their Python signatures. |
 | `list_examples`, `get_example` | Browse / fetch bundled example strategies. |
 | `list_symbols`, `resolve_symbol` | Inspect a DataStore, resolve tickers. |
 | `ingest_data` | Pull bars from Binance / Hyperliquid (Databento / Massive on Pro). |
@@ -203,7 +203,7 @@ through `strategy_json` on any tool.
 
 ## Typical LLM session
 
-1. `list_indicators_tool` → discover available indicators.
+1. `list_indicators` → discover available indicators.
 2. Use the `write_strategy` prompt → draft a strategy.
 3. `build_strategy(strategy_code=…)` → validated StrategyDef + declared parameters.
 4. `run_backtest(…)` → metrics + summary.

@@ -31,6 +31,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Office/Business :: Financial :: Investment",
 ]
 dependencies = [
@@ -51,8 +52,10 @@ manifoldbt-mcp = "manifoldbt_mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/ClementG91/manifoldbt-mcp"
+Documentation = "https://github.com/ClementG91/manifoldbt-mcp#readme"
 Upstream = "https://github.com/Jimmy7892/manifoldbt"
 Issues = "https://github.com/ClementG91/manifoldbt-mcp/issues"
+Changelog = "https://github.com/ClementG91/manifoldbt-mcp/releases"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/manifoldbt_mcp"]

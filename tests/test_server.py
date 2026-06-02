@@ -94,7 +94,7 @@ def test_build_server_registers_core_tools():
     registered = set(tools._tools.keys())  # type: ignore[attr-defined]
     for name in (
         "get_version",
-        "list_indicators_tool",
+        "list_indicators",
         "list_examples",
         "build_strategy",
         "validate_strategy",

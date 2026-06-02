@@ -114,10 +114,46 @@ def _batch_result_to_dict(item) -> dict[str, Any]:
 # ----------------------------------------------------------------------
 
 
+# ----------------------------------------------------------------------
+# Tool annotation helpers
+# ----------------------------------------------------------------------
+
+_ANN_READONLY = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+_ANN_READONLY_NETWORK = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": True,
+}
+_ANN_WRITE_FILE = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+_ANN_WRITE_NETWORK = {
+    "readOnlyHint": False,
+    "destructiveHint": True,
+    "idempotentHint": False,
+    "openWorldHint": True,
+}
+_ANN_WRITE_STATE = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": True,
+}
+
+
 def build_server() -> FastMCP:
     """Create and wire up the FastMCP server instance."""
     mcp = FastMCP(
-        "manifoldbt",
+        "manifoldbt_mcp",
         instructions=(
             "Tools for defining, backtesting, and analysing quantitative "
             "trading strategies with the manifoldbt Rust engine. "
@@ -132,7 +168,7 @@ def build_server() -> FastMCP:
     # Environment / discovery tools
     # ------------------------------------------------------------------
 
-    @mcp.tool(description="Return manifoldbt version and license tier.")
+    @mcp.tool(name="get_version", description="Return manifoldbt version and license tier.", annotations=_ANN_READONLY)
     def get_version() -> dict[str, Any]:
         try:
             tier, email = _license_info()
@@ -145,9 +181,9 @@ def build_server() -> FastMCP:
         }
 
     @mcp.tool(
-        description=(
-            "Activate a manifoldbt Pro license key for this server process."
-        ),
+        name="activate_license",
+        description="Activate a manifoldbt Pro license key for this server process.",
+        annotations=_ANN_WRITE_STATE,
     )
     def activate_license(license_key: str) -> dict[str, Any]:
         mbt.activate(license_key)
@@ -155,26 +191,30 @@ def build_server() -> FastMCP:
         return {"license_tier": tier, "license_email": email}
 
     @mcp.tool(
+        name="list_indicators",
         description=(
             "List all available technical indicators with their Python "
             "signatures, grouped by category."
         ),
+        annotations=_ANN_READONLY,
     )
     def list_indicators_tool() -> list[dict[str, str]]:
         return list_indicators()
 
     @mcp.tool(
+        name="list_examples",
         description=(
             "List example strategy scripts bundled with the library. "
             "Returns file names you can pass to get_example."
         ),
+        annotations=_ANN_READONLY,
     )
     def list_examples() -> list[str]:
         if _EXAMPLES_DIR is None or not _EXAMPLES_DIR.is_dir():
             return []
         return sorted(p.name for p in _EXAMPLES_DIR.glob("*.py"))
 
-    @mcp.tool(description="Read the source of a bundled example strategy.")
+    @mcp.tool(name="get_example", description="Read the source of a bundled example strategy.", annotations=_ANN_READONLY)
     def get_example(name: str) -> dict[str, str]:
         if _EXAMPLES_DIR is None:
             raise ValueError("examples directory not found in manifoldbt install")
@@ -188,24 +228,28 @@ def build_server() -> FastMCP:
     # ------------------------------------------------------------------
 
     @mcp.tool(
+        name="list_symbols",
         description=(
             "List every symbol registered in a DataStore. Pass "
             "{'data_root': 'data', 'metadata_db': 'metadata/metadata.sqlite'}."
         ),
+        annotations=_ANN_READONLY,
     )
     def list_symbols(store: dict[str, Any]) -> list[dict[str, Any]]:
         s = resolve_store(store)
         return [{"id": sid, "ticker": ticker} for sid, ticker in s.list_symbols()]
 
-    @mcp.tool(description="Resolve a ticker string to its SymbolId in a DataStore.")
+    @mcp.tool(name="resolve_symbol", description="Resolve a ticker string to its SymbolId in a DataStore.", annotations=_ANN_READONLY)
     def resolve_symbol(ticker: str, store: dict[str, Any]) -> int:
         return int(resolve_store(store).resolve_symbol(ticker))
 
     @mcp.tool(
+        name="ingest_data",
         description=(
             "Ingest bars from a data provider into a parquet DataStore. "
             "Providers: binance, hyperliquid (free); databento, massive (Pro)."
         ),
+        annotations=_ANN_WRITE_NETWORK,
     )
     def ingest_data(
         provider: str,
@@ -248,11 +292,13 @@ def build_server() -> FastMCP:
     # ------------------------------------------------------------------
 
     @mcp.tool(
+        name="build_strategy",
         description=(
             "Compile a Python DSL snippet into a manifoldbt StrategyDef. "
             "The snippet must assign 'strategy = mbt.Strategy...'. Returns "
             "the serialised JSON plus a list of declared parameters."
         ),
+        annotations=_ANN_READONLY,
     )
     def build_strategy(strategy_code: str) -> dict[str, Any]:
         strat = compile_strategy_code(strategy_code)
@@ -267,10 +313,12 @@ def build_server() -> FastMCP:
         }
 
     @mcp.tool(
+        name="validate_strategy",
         description=(
             "Validate a StrategyDef JSON string by running it through the "
             "Rust compiler. Returns the compiled expression plan or an error."
         ),
+        annotations=_ANN_READONLY,
     )
     def validate_strategy(strategy_json: str) -> dict[str, Any]:
         if not isinstance(strategy_json, str):
@@ -287,12 +335,14 @@ def build_server() -> FastMCP:
     # ------------------------------------------------------------------
 
     @mcp.tool(
+        name="run_backtest",
         description=(
             "Run a backtest. Supply either a Python DSL snippet "
             "(strategy_code) or a serialised StrategyDef (strategy_json) "
             "plus a config dict and a store descriptor. Returns metrics "
             "and a printable summary."
         ),
+        annotations=_ANN_READONLY,
     )
     def run_backtest(
         config: dict[str, Any],
@@ -308,10 +358,12 @@ def build_server() -> FastMCP:
         return _result_to_dict(result)
 
     @mcp.tool(
+        name="run_batch",
         description=(
             "Run many strategies in parallel against a shared config/store. "
             "Each item in strategies is {strategy_code|strategy_json}."
         ),
+        annotations=_ANN_READONLY,
     )
     def run_batch(
         strategies: list[dict[str, Any]],
@@ -334,11 +386,13 @@ def build_server() -> FastMCP:
         return [_result_to_dict(r) for r in results]
 
     @mcp.tool(
+        name="run_sweep",
         description=(
             "Run a parameter sweep over a Cartesian grid. param_grid maps "
             "parameter names (declared via param('name') in the strategy) "
             "to lists of values."
         ),
+        annotations=_ANN_READONLY,
     )
     def run_sweep(
         param_grid: dict[str, list[Any]],
@@ -378,10 +432,12 @@ def build_server() -> FastMCP:
         }
 
     @mcp.tool(
+        name="run_sweep_2d",
         description=(
             "Run a 2D parameter sweep (heatmap). sweep_config must contain "
             "x_param, x_values, y_param, y_values, metric."
         ),
+        annotations=_ANN_READONLY,
     )
     def run_sweep_2d(
         sweep_config: dict[str, Any],
@@ -397,10 +453,12 @@ def build_server() -> FastMCP:
         return mbt.run_sweep_2d(strat, sweep_config, cfg, st)
 
     @mcp.tool(
+        name="run_walk_forward",
         description=(
             "Walk-forward optimisation (Pro). wf_config needs method, "
             "n_splits, train_ratio, optimize_metric, param_grid."
         ),
+        annotations=_ANN_READONLY,
     )
     def run_walk_forward(
         wf_config: dict[str, Any],
@@ -416,10 +474,12 @@ def build_server() -> FastMCP:
         return mbt.run_walk_forward(strat, wf_config, cfg, st)
 
     @mcp.tool(
+        name="run_stability",
         description=(
             "Parameter stability analysis: runs a 1D sweep and reports the "
             "mean/std/stability score of a metric."
         ),
+        annotations=_ANN_READONLY,
     )
     def run_stability(
         stability_config: dict[str, Any],
@@ -435,10 +495,12 @@ def build_server() -> FastMCP:
         return mbt.run_stability(strat, stability_config, cfg, st)
 
     @mcp.tool(
+        name="run_monte_carlo",
         description=(
             "Run Monte Carlo permutations on a backtest result. Re-runs the "
             "backtest first, then permutes trade returns."
         ),
+        annotations=_ANN_READONLY,
     )
     def run_monte_carlo(
         config: dict[str, Any],
@@ -456,11 +518,13 @@ def build_server() -> FastMCP:
         return py_run_monte_carlo(result.raw, json.dumps(mc_config or {}))
 
     @mcp.tool(
+        name="run_stochastic",
         description=(
             "Stochastic SDE simulation (no DataStore required). 'model' is "
             "either a preset name ('gbm', 'heston', 'merton', 'garch_jd') "
             "or a dict matching StochasticModel.to_dict()."
         ),
+        annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
     )
     def run_stochastic(
         model: Any,
@@ -514,11 +578,13 @@ def build_server() -> FastMCP:
         )
 
     @mcp.tool(
+        name="run_portfolio",
         description=(
             "Run a multi-strategy portfolio. 'portfolio' is a dict with "
             "keys strategies (list of {strategy_code|strategy_json, weight}), "
             "risk_rules (list), rebalance (dict)."
         ),
+        annotations=_ANN_READONLY,
     )
     def run_portfolio(
         portfolio: dict[str, Any],
@@ -559,10 +625,12 @@ def build_server() -> FastMCP:
         return out
 
     @mcp.tool(
+        name="plot_tearsheet",
         description=(
             "Generate a tearsheet PNG from a backtest run. Saves to "
             "output_path (default: ./tearsheet.png) and returns its path."
         ),
+        annotations=_ANN_WRITE_FILE,
     )
     def plot_tearsheet(
         config: dict[str, Any],

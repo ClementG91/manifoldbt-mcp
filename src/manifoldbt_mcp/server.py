@@ -14,10 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-# Pin a non-interactive matplotlib backend before pyplot is ever imported
-# (plot_tearsheet imports it lazily). The interactive default (e.g. TkAgg)
-# is never needed by the server and misbehaves on headless / threaded runs.
-os.environ.setdefault("MPLBACKEND", "Agg")
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -36,6 +32,11 @@ from manifoldbt_mcp.reference import (
     render_indicators_markdown,
 )
 from manifoldbt_mcp.store import resolve_store
+
+# Pin a non-interactive matplotlib backend before pyplot is ever imported.
+# plot_tearsheet imports matplotlib lazily at runtime; the interactive default
+# (e.g. TkAgg) is never needed by the server and misbehaves on headless runs.
+os.environ.setdefault("MPLBACKEND", "Agg")
 
 
 def _find_examples_dir() -> Path | None:

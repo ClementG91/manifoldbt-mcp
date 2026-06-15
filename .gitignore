@@ -43,3 +43,4 @@ metadata/
 *.parquet
 *.sqlite
 tearsheet*.png
+tearsheet*.html

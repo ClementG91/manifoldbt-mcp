@@ -33,6 +33,11 @@ from manifoldbt_mcp.reference import (
 )
 from manifoldbt_mcp.store import resolve_store
 
+# Pin a non-interactive matplotlib backend before pyplot is ever imported.
+# plot_tearsheet imports matplotlib lazily at runtime; the interactive default
+# (e.g. TkAgg) is never needed by the server and misbehaves on headless runs.
+os.environ.setdefault("MPLBACKEND", "Agg")
+
 
 def _find_examples_dir() -> Path | None:
     """Locate the ``examples`` dir shipped with the installed manifoldbt package."""
@@ -627,8 +632,9 @@ def build_server() -> FastMCP:
     @mcp.tool(
         name="plot_tearsheet",
         description=(
-            "Generate a tearsheet PNG from a backtest run. Saves to "
-            "output_path (default: ./tearsheet.png) and returns its path."
+            "Generate a tearsheet from a backtest run. Renders a self-contained "
+            "HTML report (charts embedded as PNGs) to output_path "
+            "(default: ./tearsheet.html) and returns its path."
         ),
         annotations=_ANN_WRITE_FILE,
     )
@@ -638,7 +644,7 @@ def build_server() -> FastMCP:
         *,
         strategy_code: str | None = None,
         strategy_json: str | None = None,
-        output_path: str = "tearsheet.png",
+        output_path: str = "tearsheet.html",
         dpi: int = 150,
     ) -> dict[str, str]:
         strat = _get_strategy(strategy_code, strategy_json)
@@ -646,7 +652,7 @@ def build_server() -> FastMCP:
         st = resolve_store(store)
         result = mbt.run(strat, cfg, st)
         from manifoldbt.plot.tearsheet import tearsheet  # lazy: requires matplotlib
-        tearsheet(result, path=output_path, show=False, dpi=dpi)
+        tearsheet(result, save=output_path, show=False, dpi=dpi)
         return {"path": os.path.abspath(output_path)}
 
     # ------------------------------------------------------------------
@@ -753,6 +759,14 @@ def main(argv: list[str] | None = None) -> None:
         help="Port for HTTP transport (default: 8765).",
     )
     args = parser.parse_args(argv)
+
+    # Warm the optional plotting stack before the transport loop starts.
+    # Importing matplotlib lazily once the stdio event loop is already running
+    # stalls the server, so do the heavy import up front when available.
+    try:
+        import manifoldbt.plot.tearsheet  # noqa: F401
+    except Exception:  # pragma: no cover - plotting extra not installed
+        pass
 
     server = build_server()
 

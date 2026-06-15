@@ -124,7 +124,7 @@ Then connect your MCP client to `http://<host>:8765/mcp`.
 | `run_monte_carlo` | Trade-permutation Monte Carlo on a fresh backtest. |
 | `run_stochastic` | SDE path simulation (GBM, Heston, Merton, GARCH-JD, or custom). |
 | `run_portfolio` | Multi-strategy portfolio with risk rules & rebalancing. |
-| `plot_tearsheet` | Render a full tearsheet PNG from a backtest. |
+| `plot_tearsheet` | Render a full tearsheet as a self-contained HTML report from a backtest. |
 
 ### 3 resources + 1 template
 
@@ -208,7 +208,7 @@ through `strategy_json` on any tool.
 3. `build_strategy(strategy_code=…)` → validated StrategyDef + declared parameters.
 4. `run_backtest(…)` → metrics + summary.
 5. `run_sweep(…)` ranked by Sharpe → find the best variant.
-6. `plot_tearsheet(…)` → PNG tearsheet on disk.
+6. `plot_tearsheet(…)` → HTML tearsheet report on disk.
 7. Use the `analyze_result` prompt → research note.
 
 ---

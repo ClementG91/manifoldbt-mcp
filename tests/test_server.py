@@ -20,8 +20,14 @@ from manifoldbt_mcp.server import (
     _grid_size,
     _rank_indices,
     _rank_rows,
+    _with_defaults,
     build_server,
 )
+
+
+def _tools(server):
+    mgr = getattr(server, "_tool_manager", None) or server.tool_manager
+    return mgr._tools
 
 
 def _rows(metric: str, values):
@@ -197,6 +203,57 @@ def test_sweep_result_is_iterable_and_has_no_results_attribute():
     assert not hasattr(mbt.SweepResult, "results")
     for method in ("__iter__", "__len__", "__getitem__"):
         assert hasattr(mbt.SweepResult, method), method
+
+
+def test_with_defaults_fills_gaps_without_overriding_the_caller():
+    # These configs go straight to the Rust deserialiser, which has no serde
+    # default for max_parallelism, so omitting it used to fail the call with
+    # "invalid json payload: missing field `max_parallelism`".
+    assert _with_defaults({"metric": "sharpe"}, {"max_parallelism": 0}) == {
+        "metric": "sharpe",
+        "max_parallelism": 0,
+    }
+    assert _with_defaults({"max_parallelism": 8}, {"max_parallelism": 0}) == {
+        "max_parallelism": 8
+    }
+    assert _with_defaults(None, {"n_paths": 1000}) == {"n_paths": 1000}
+
+
+def test_research_tools_document_the_fields_the_engine_requires():
+    # The tool description is the only contract the model sees. Following it
+    # has to be enough to make a valid call, so every required field of the
+    # Rust config struct must be named in it.
+    tools = _tools(build_server())
+    for name, required in (
+        ("run_sweep_2d", ("x_param", "x_values", "y_param", "y_values", "metric")),
+        ("run_stability", ("param_name", "values", "metric")),
+        ("run_monte_carlo", ("n_paths", "method")),
+    ):
+        description = tools[name].description
+        for field in required:
+            assert field in description, f"{name} does not document '{field}'"
+
+
+def test_list_examples_explains_itself_instead_of_returning_empty():
+    from manifoldbt_mcp import server as server_module
+
+    if server_module._EXAMPLES_DIR is not None:
+        pytest.skip("running against a source checkout that does ship examples")
+
+    # Returning [] read as "manifoldbt ships no examples", which is false.
+    with pytest.raises(ValueError, match="bundle examples"):
+        _tools(build_server())["list_examples"].fn()
+
+
+def test_strategy_authoring_resource_does_not_pose_as_the_api_tour():
+    resources = build_server()._resource_manager._resources
+    api = resources["manifoldbt://reference/api"].fn()
+    authoring = resources["manifoldbt://reference/strategy-authoring"].fn()
+
+    assert authoring != api, (
+        "the authoring resource returns the API tour verbatim while claiming "
+        "to be the authoring guide"
+    )
 
 
 def test_build_server_registers_core_tools():

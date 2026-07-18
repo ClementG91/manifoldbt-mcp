@@ -130,6 +130,20 @@ def _rank_indices(column: Any, *, lower_is_better: bool) -> list[int]:
     return [int(i) for i in np.concatenate([ranked, missing])]
 
 
+def _with_defaults(
+    spec: Mapping[str, Any] | None, defaults: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Fill the fields the engine requires but that a caller cannot guess.
+
+    These config dicts are handed straight to the Rust deserialiser, which has
+    no serde defaults for them, so a missing key surfaces as
+    ``invalid json payload: missing field`` rather than anything actionable.
+    """
+    out = dict(defaults)
+    out.update(spec or {})
+    return out
+
+
 def _grid_size(param_grid: Mapping[str, Sequence[Any]]) -> int:
     total = 1
     for values in param_grid.values():
@@ -279,14 +293,24 @@ def build_server() -> FastMCP:
     @mcp.tool(
         name="list_examples",
         description=(
-            "List example strategy scripts bundled with the library. "
-            "Returns file names you can pass to get_example."
+            "List example strategy scripts shipped alongside the library. "
+            "Returns file names you can pass to get_example. Only available "
+            "when the server runs against a manifoldbt source checkout: the "
+            "published wheel does not carry the examples directory, and this "
+            "reports that rather than returning an empty list."
         ),
         annotations=_ANN_READONLY,
     )
     def list_examples() -> list[str]:
         if _EXAMPLES_DIR is None or not _EXAMPLES_DIR.is_dir():
-            return []
+            # Returning [] here read as "this library ships no examples",
+            # which is false and unactionable. Say what is actually going on.
+            raise ValueError(
+                "no examples directory found next to the installed manifoldbt "
+                "package; the published wheel does not bundle examples. Read "
+                "the manifoldbt://reference/strategy-authoring resource, or "
+                "run this server against a source checkout."
+            )
         return sorted(p.name for p in _EXAMPLES_DIR.glob("*.py"))
 
     @mcp.tool(name="get_example", description="Read the source of a bundled example strategy.", annotations=_ANN_READONLY)
@@ -562,8 +586,11 @@ def build_server() -> FastMCP:
     @mcp.tool(
         name="run_sweep_2d",
         description=(
-            "Run a 2D parameter sweep (heatmap). sweep_config must contain "
-            "x_param, x_values, y_param, y_values, metric."
+            "Run a 2D parameter sweep (heatmap). sweep_config takes x_param "
+            "(str), x_values (list), y_param (str), y_values (list) and "
+            "metric (str), all required; max_parallelism (int) defaults to 0 "
+            "meaning all cores. Returns metric_grid[x_idx][y_idx] plus the "
+            "axis values."
         ),
         annotations=_ANN_READONLY,
     )
@@ -578,7 +605,9 @@ def build_server() -> FastMCP:
         strat = _get_strategy(strategy_code, strategy_json)
         cfg = build_backtest_config(config)
         st = resolve_store(store)
-        return mbt.run_sweep_2d(strat, sweep_config, cfg, st)
+        return mbt.run_sweep_2d(
+            strat, _with_defaults(sweep_config, {"max_parallelism": 0}), cfg, st
+        )
 
     @mcp.tool(
         name="run_walk_forward",
@@ -605,7 +634,10 @@ def build_server() -> FastMCP:
         name="run_stability",
         description=(
             "Parameter stability analysis: runs a 1D sweep and reports the "
-            "mean/std/stability score of a metric."
+            "mean/std/stability score of a metric. stability_config takes "
+            "param_name (str), values (list) and metric (str), all required; "
+            "max_parallelism (int) defaults to 0 meaning all cores. "
+            "stability_score is 1 - std/|mean|, higher is more stable."
         ),
         annotations=_ANN_READONLY,
     )
@@ -620,13 +652,23 @@ def build_server() -> FastMCP:
         strat = _get_strategy(strategy_code, strategy_json)
         cfg = build_backtest_config(config)
         st = resolve_store(store)
-        return mbt.run_stability(strat, stability_config, cfg, st)
+        return mbt.run_stability(
+            strat, _with_defaults(stability_config, {"max_parallelism": 0}), cfg, st
+        )
 
     @mcp.tool(
         name="run_monte_carlo",
         description=(
-            "Run Monte Carlo permutations on a backtest result. Re-runs the "
-            "backtest first, then permutes trade returns."
+            "Run Monte Carlo resampling on a backtest result. Re-runs the "
+            "backtest first, then resamples it. mc_config takes n_paths (int, "
+            "default 1000) and method, one of {'type': 'return_bootstrap'}, "
+            "{'type': 'block_bootstrap', 'block_size': N} or "
+            "{'type': 'trade_bootstrap'} (default return_bootstrap). "
+            "initial_capital defaults to the value in config. Optional: "
+            "rng_seed, confidence_levels, cvar_levels, dd_thresholds, "
+            "wipeout_threshold (default -0.90), store_paths, device. "
+            "Rare-event metrics such as prob_of_wipeout need many paths to "
+            "read anything but zero."
         ),
         annotations=_ANN_READONLY,
     )
@@ -643,7 +685,17 @@ def build_server() -> FastMCP:
         st = resolve_store(store)
         result = mbt.run(strat, cfg, st)
         from manifoldbt._native import py_run_monte_carlo
-        return py_run_monte_carlo(result.raw, json.dumps(mc_config or {}))
+        mc = _with_defaults(
+            mc_config,
+            {
+                "n_paths": 1000,
+                "method": {"type": "return_bootstrap"},
+                # The engine has no default here, and the right value is the
+                # capital the caller already declared for the backtest.
+                "initial_capital": cfg.initial_capital,
+            },
+        )
+        return py_run_monte_carlo(result.raw, json.dumps(mc))
 
     @mcp.tool(
         name="run_stochastic",
@@ -796,18 +848,27 @@ def build_server() -> FastMCP:
 
     @mcp.resource("manifoldbt://reference/strategy-authoring")
     def strategy_authoring_doc() -> str:
-        """Full strategy authoring guide (best-effort from the installed package)."""
+        """Strategy authoring guide, or the API tour when it is not bundled."""
         try:
-            pkg_root = Path(mbt.__file__).resolve().parent
+            pkg_root: Path | None = Path(mbt.__file__).resolve().parent
         except Exception:  # pragma: no cover
-            return render_api_overview()
-        for candidate in (
-            pkg_root.parent.parent / "docs" / "strategy-authoring.md",
-            pkg_root.parent / "docs" / "strategy-authoring.md",
-        ):
-            if candidate.is_file():
-                return candidate.read_text()
-        return render_api_overview()
+            pkg_root = None
+        if pkg_root is not None:
+            for candidate in (
+                pkg_root.parent.parent / "docs" / "strategy-authoring.md",
+                pkg_root.parent / "docs" / "strategy-authoring.md",
+            ):
+                if candidate.is_file():
+                    return candidate.read_text()
+        # The published wheel carries no docs/, so this used to return the API
+        # overview verbatim: byte-identical to manifoldbt://reference/api while
+        # claiming to be the authoring guide. Say so instead of pretending.
+        return (
+            "> The full strategy authoring guide is not bundled with the "
+            "installed manifoldbt package (the published wheel ships no docs "
+            "directory). What follows is the API overview, the same content "
+            "as the manifoldbt://reference/api resource.\n\n"
+        ) + render_api_overview()
 
     @mcp.resource("manifoldbt://examples/{slug}")
     def example_source(slug: str) -> str:

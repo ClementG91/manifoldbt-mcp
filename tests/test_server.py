@@ -15,7 +15,13 @@ pytest.importorskip("manifoldbt")
 from manifoldbt_mcp.config_helpers import build_backtest_config, parse_interval
 from manifoldbt_mcp.dsl import compile_strategy_code
 from manifoldbt_mcp.reference import list_indicators, render_indicators_markdown
-from manifoldbt_mcp.server import _rank_indices, _rank_rows, build_server
+from manifoldbt_mcp.server import (
+    _combo_at,
+    _grid_size,
+    _rank_indices,
+    _rank_rows,
+    build_server,
+)
 
 
 def _rows(metric: str, values):
@@ -139,6 +145,47 @@ def test_rank_indices_keeps_nan_last_in_both_directions():
     col = np.array([1.0, np.nan, 2.0])
     assert _rank_indices(col, lower_is_better=False) == [2, 0, 1]
     assert _rank_indices(col, lower_is_better=True) == [0, 2, 1]
+
+
+def test_combo_at_matches_the_engine_enumeration():
+    # Golden sequence captured from manifoldbt 0.13.0 itself: this exact grid
+    # was swept, then each index re-run as a 1-combo sweep, and all 12
+    # final_equity values matched. Insertion order is zz-then-aa while the
+    # engine sorts alphabetically, so a decoder that trusted insertion order
+    # would transpose the whole leaderboard.
+    grid = {"zz": [50, 80, 120], "aa": [5, 10, 15, 20]}
+    decoded = [_combo_at(grid, i) for i in range(12)]
+
+    assert decoded[0] == {"aa": 5, "zz": 50}
+    assert decoded[1] == {"aa": 5, "zz": 80}
+    assert decoded[3] == {"aa": 10, "zz": 50}
+    assert decoded[11] == {"aa": 20, "zz": 120}
+    # The alphabetically last axis varies fastest.
+    assert [c["zz"] for c in decoded[:4]] == [50, 80, 120, 50]
+    assert [c["aa"] for c in decoded[:4]] == [5, 5, 5, 10]
+
+
+def test_combo_at_agrees_with_itertools_product():
+    import itertools
+
+    grid = {"beta": ["x", "y"], "alpha": [1, 2, 3], "gamma": [True, False]}
+    names = sorted(grid)
+    expected = [
+        dict(zip(names, values, strict=True))
+        for values in itertools.product(*(grid[n] for n in names))
+    ]
+    assert [_combo_at(grid, i) for i in range(len(expected))] == expected
+
+
+def test_combo_at_handles_degenerate_grids():
+    assert _combo_at({"only": [7, 8, 9]}, 2) == {"only": 9}
+    assert _combo_at({}, 0) == {}
+
+
+def test_grid_size_is_the_cartesian_product():
+    assert _grid_size({"a": [1, 2, 3], "b": [1, 2]}) == 6
+    assert _grid_size({}) == 1
+    assert _grid_size({"a": []}) == 0
 
 
 def test_build_server_registers_core_tools():

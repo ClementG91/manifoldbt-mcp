@@ -130,6 +130,42 @@ def _rank_indices(column: Any, *, lower_is_better: bool) -> list[int]:
     return [int(i) for i in np.concatenate([ranked, missing])]
 
 
+def _grid_size(param_grid: Mapping[str, Sequence[Any]]) -> int:
+    total = 1
+    for values in param_grid.values():
+        total *= len(values)
+    return total
+
+
+def _combo_at(param_grid: Mapping[str, Sequence[Any]], index: int) -> dict[str, Any]:
+    """Decode a combo index back to the parameter values that produced it.
+
+    ``BatchResultLite`` carries no parameters, but the engine enumerates the
+    grid with the axes sorted alphabetically by name and the last one varying
+    fastest, and guarantees result ``i`` is combo ``i``. Mixed-radix decoding
+    recovers the combo without materialising the product, so a million-combo
+    sweep only decodes its top_k.
+    """
+    combo: dict[str, Any] = {}
+    for name in sorted(param_grid, reverse=True):
+        values = param_grid[name]
+        index, digit = divmod(index, len(values))
+        combo[name] = values[digit]
+    return combo
+
+
+def _with_params(
+    row: dict[str, Any],
+    param_grid: Mapping[str, Sequence[Any]],
+    index: int,
+    *,
+    decodable: bool,
+) -> dict[str, Any]:
+    """Attach the originating combo, or None when the mapping is not sound."""
+    row["params"] = _combo_at(param_grid, index) if decodable else None
+    return row
+
+
 def _rank_rows(rows: Sequence[dict[str, Any]], metric: str) -> list[dict[str, Any]]:
     """Sort already-materialised rows best-first on ``metric``."""
     lower = metric in _LOWER_IS_BETTER
@@ -429,7 +465,8 @@ def build_server() -> FastMCP:
         description=(
             "Run a parameter sweep over a Cartesian grid. param_grid maps "
             "parameter names (declared via param('name') in the strategy) "
-            "to lists of values. The default lite path derives cagr, calmar "
+            "to lists of values. Each returned row carries the 'params' that "
+            "produced it. The default lite path derives cagr, calmar "
             "and ulcer_index from one equity point per UTC day, so those "
             "three differ slightly from run(); every other metric matches it "
             "exactly. Rank freely on them, then re-run the winner through "
@@ -465,7 +502,12 @@ def build_server() -> FastMCP:
             sweep = mbt.run_sweep(
                 strat, param_grid, cfg, st, max_parallelism=max_parallelism
             )
-            rows = [_result_to_dict(r) for r in sweep.results]
+            results = list(sweep.results)
+            decodable = _grid_size(param_grid) == len(results)
+            rows = [
+                _with_params(_result_to_dict(r), param_grid, i, decodable=decodable)
+                for i, r in enumerate(results)
+            ]
             return {
                 "total": len(rows),
                 "rank_metric": rank_metric,
@@ -481,19 +523,31 @@ def build_server() -> FastMCP:
             device=device,
             precision=precision,
         )
+        # Mislabelling a combo is worse than not labelling it, so only decode
+        # when the result count matches the grid exactly.
+        decodable = _grid_size(param_grid) == len(raws)
+
         # Rank off a single numpy column instead of building a 21-key metrics
         # dict per combo: on a large grid only the top_k rows get materialised.
         try:
             column = mbt.sweep_columns(raws, rank_metric)
         except Exception:
             # rank_metric outside the column set (e.g. a trade_stats field).
-            rows = [_batch_result_to_dict(r) for r in raws]
+            rows = [
+                _with_params(_batch_result_to_dict(r), param_grid, i, decodable=decodable)
+                for i, r in enumerate(raws)
+            ]
             top = _rank_rows(rows, rank_metric)[:k]
         else:
             order = _rank_indices(
                 column, lower_is_better=rank_metric in _LOWER_IS_BETTER
             )
-            top = [_batch_result_to_dict(raws[i]) for i in order[:k]]
+            top = [
+                _with_params(
+                    _batch_result_to_dict(raws[i]), param_grid, i, decodable=decodable
+                )
+                for i in order[:k]
+            ]
 
         return {
             "total": len(raws),

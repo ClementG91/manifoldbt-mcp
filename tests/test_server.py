@@ -188,6 +188,17 @@ def test_grid_size_is_the_cartesian_product():
     assert _grid_size({"a": []}) == 0
 
 
+def test_sweep_result_is_iterable_and_has_no_results_attribute():
+    # run_sweep(lite=False) reads its rows by iterating the SweepResult.
+    # It used to read a .results attribute that has never existed, so every
+    # non-lite sweep died with AttributeError. Pin the contract.
+    import manifoldbt as mbt
+
+    assert not hasattr(mbt.SweepResult, "results")
+    for method in ("__iter__", "__len__", "__getitem__"):
+        assert hasattr(mbt.SweepResult, method), method
+
+
 def test_build_server_registers_core_tools():
     server = build_server()
     tools = getattr(server, "_tool_manager", None) or getattr(server, "tool_manager", None)

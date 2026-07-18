@@ -502,7 +502,10 @@ def build_server() -> FastMCP:
             sweep = mbt.run_sweep(
                 strat, param_grid, cfg, st, max_parallelism=max_parallelism
             )
-            results = list(sweep.results)
+            # SweepResult is iterable; it has never exposed a .results
+            # attribute, so reading one raised AttributeError on every
+            # lite=false call.
+            results = list(sweep)
             decodable = _grid_size(param_grid) == len(results)
             rows = [
                 _with_params(_result_to_dict(r), param_grid, i, decodable=decodable)

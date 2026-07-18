@@ -14,7 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -32,11 +32,6 @@ from manifoldbt_mcp.reference import (
     render_indicators_markdown,
 )
 from manifoldbt_mcp.store import resolve_store
-
-# Pin a non-interactive matplotlib backend before pyplot is ever imported.
-# plot_tearsheet imports matplotlib lazily at runtime; the interactive default
-# (e.g. TkAgg) is never needed by the server and misbehaves on headless runs.
-os.environ.setdefault("MPLBACKEND", "Agg")
 
 
 def _find_examples_dir() -> Path | None:
@@ -112,6 +107,45 @@ def _batch_result_to_dict(item) -> dict[str, Any]:
         "trade_count": getattr(item, "trade_count", None),
         "metrics": getattr(item, "metrics", None),
     }
+
+
+# Metrics that are reported as a positive magnitude, so the best combo is the
+# smallest one. Everything else ranks best-first descending. Note max_drawdown
+# is NOT here: the engine reports it as ``eq / peak - 1``, i.e. negative, so a
+# larger value already means a shallower drawdown.
+_LOWER_IS_BETTER = frozenset(
+    {"volatility", "ulcer_index", "max_drawdown_duration_days"}
+)
+
+
+def _rank_indices(column: Any, *, lower_is_better: bool) -> list[int]:
+    """Order indices best-first, keeping NaN/inf last in both directions."""
+    import numpy as np
+
+    order = np.argsort(column, kind="stable")
+    finite = np.isfinite(column[order])
+    ranked, missing = order[finite], order[~finite]
+    if not lower_is_better:
+        ranked = ranked[::-1]
+    return [int(i) for i in np.concatenate([ranked, missing])]
+
+
+def _rank_rows(rows: Sequence[dict[str, Any]], metric: str) -> list[dict[str, Any]]:
+    """Sort already-materialised rows best-first on ``metric``."""
+    lower = metric in _LOWER_IS_BETTER
+    sentinel = float("inf") if lower else float("-inf")
+
+    def key(row: dict[str, Any]) -> float:
+        value = (row.get("metrics") or {}).get(metric)
+        if value is None:
+            return sentinel
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return sentinel
+        return sentinel if value != value else value  # NaN -> last
+
+    return sorted(rows, key=key, reverse=not lower)
 
 
 # ----------------------------------------------------------------------
@@ -395,7 +429,11 @@ def build_server() -> FastMCP:
         description=(
             "Run a parameter sweep over a Cartesian grid. param_grid maps "
             "parameter names (declared via param('name') in the strategy) "
-            "to lists of values."
+            "to lists of values. The default lite path derives cagr, calmar "
+            "and ulcer_index from one equity point per UTC day, so those "
+            "three differ slightly from run(); every other metric matches it "
+            "exactly. Rank freely on them, then re-run the winner through "
+            "run_backtest for an exact P&L."
         ),
         annotations=_ANN_READONLY,
     )
@@ -410,30 +448,58 @@ def build_server() -> FastMCP:
         max_parallelism: int = 0,
         top_k: int = 10,
         rank_metric: str = "sharpe",
+        device: str = "auto",
+        precision: str = "fp64",
     ) -> dict[str, Any]:
         strat = _get_strategy(strategy_code, strategy_json)
         cfg = build_backtest_config(config)
         st = resolve_store(store)
-        if lite:
-            raws = mbt.run_sweep_lite(
-                strat, param_grid, cfg, st, max_parallelism=max_parallelism
-            )
-            rows = [_batch_result_to_dict(r) for r in raws]
-        else:
+        k = max(1, int(top_k))
+
+        if not lite:
+            if device != "auto" or precision != "fp64":
+                raise ValueError(
+                    "device/precision apply to the lite sweep only; "
+                    "pass lite=true to select a device"
+                )
             sweep = mbt.run_sweep(
                 strat, param_grid, cfg, st, max_parallelism=max_parallelism
             )
             rows = [_result_to_dict(r) for r in sweep.results]
+            return {
+                "total": len(rows),
+                "rank_metric": rank_metric,
+                "top": _rank_rows(rows, rank_metric)[:k],
+            }
 
-        ranked = sorted(
-            rows,
-            key=lambda r: (r.get("metrics") or {}).get(rank_metric) or float("-inf"),
-            reverse=True,
+        raws = mbt.run_sweep_lite(
+            strat,
+            param_grid,
+            cfg,
+            st,
+            max_parallelism=max_parallelism,
+            device=device,
+            precision=precision,
         )
+        # Rank off a single numpy column instead of building a 21-key metrics
+        # dict per combo: on a large grid only the top_k rows get materialised.
+        try:
+            column = mbt.sweep_columns(raws, rank_metric)
+        except Exception:
+            # rank_metric outside the column set (e.g. a trade_stats field).
+            rows = [_batch_result_to_dict(r) for r in raws]
+            top = _rank_rows(rows, rank_metric)[:k]
+        else:
+            order = _rank_indices(
+                column, lower_is_better=rank_metric in _LOWER_IS_BETTER
+            )
+            top = [_batch_result_to_dict(raws[i]) for i in order[:k]]
+
         return {
-            "total": len(rows),
+            "total": len(raws),
             "rank_metric": rank_metric,
-            "top": ranked[: max(1, int(top_k))],
+            "device": device,
+            "top": top,
         }
 
     @mcp.tool(
@@ -632,9 +698,11 @@ def build_server() -> FastMCP:
     @mcp.tool(
         name="plot_tearsheet",
         description=(
-            "Generate a tearsheet from a backtest run. Renders a self-contained "
-            "HTML report (charts embedded as PNGs) to output_path "
-            "(default: ./tearsheet.html) and returns its path."
+            "Generate a tearsheet from a backtest run. Writes an HTML report "
+            "with interactive plotly charts to output_path (default: "
+            "./tearsheet.html) and returns its path. plotlyjs='cdn' keeps the "
+            "file small but needs network access when opened; 'inline' embeds "
+            "the plotly runtime for a fully offline report (~4.4 MB heavier)."
         ),
         annotations=_ANN_WRITE_FILE,
     )
@@ -645,14 +713,14 @@ def build_server() -> FastMCP:
         strategy_code: str | None = None,
         strategy_json: str | None = None,
         output_path: str = "tearsheet.html",
-        dpi: int = 150,
+        plotlyjs: str = "cdn",
     ) -> dict[str, str]:
         strat = _get_strategy(strategy_code, strategy_json)
         cfg = build_backtest_config(config)
         st = resolve_store(store)
         result = mbt.run(strat, cfg, st)
-        from manifoldbt.plot.tearsheet import tearsheet  # lazy: requires matplotlib
-        tearsheet(result, save=output_path, show=False, dpi=dpi)
+        from manifoldbt.plot.tearsheet import tearsheet  # lazy: requires plotly
+        tearsheet(result, save=output_path, show=False, plotlyjs=plotlyjs)
         return {"path": os.path.abspath(output_path)}
 
     # ------------------------------------------------------------------
@@ -761,7 +829,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     # Warm the optional plotting stack before the transport loop starts.
-    # Importing matplotlib lazily once the stdio event loop is already running
+    # Importing plotly lazily once the stdio event loop is already running
     # stalls the server, so do the heavy import up front when available.
     try:
         import manifoldbt.plot.tearsheet  # noqa: F401

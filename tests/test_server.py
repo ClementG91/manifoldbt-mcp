@@ -15,7 +15,11 @@ pytest.importorskip("manifoldbt")
 from manifoldbt_mcp.config_helpers import build_backtest_config, parse_interval
 from manifoldbt_mcp.dsl import compile_strategy_code
 from manifoldbt_mcp.reference import list_indicators, render_indicators_markdown
-from manifoldbt_mcp.server import build_server
+from manifoldbt_mcp.server import _rank_indices, _rank_rows, build_server
+
+
+def _rows(metric: str, values):
+    return [{"metrics": {metric: v}, "tag": i} for i, v in enumerate(values)]
 
 
 def test_parse_interval_shorthands():
@@ -85,6 +89,56 @@ def test_render_indicators_markdown_has_groups():
     assert "# manifoldbt indicator reference" in md
     assert "## Trend / Moving averages" in md
     assert "`ema" in md
+
+
+def test_rank_rows_puts_best_sharpe_first():
+    ranked = _rank_rows(_rows("sharpe", [0.4, 2.1, 1.0]), "sharpe")
+    assert [r["tag"] for r in ranked] == [1, 2, 0]
+
+
+def test_rank_rows_minimises_positive_risk_metrics():
+    # ulcer_index and volatility are positive magnitudes: smallest wins.
+    ranked = _rank_rows(_rows("ulcer_index", [0.30, 0.05, 0.12]), "ulcer_index")
+    assert [r["tag"] for r in ranked] == [1, 2, 0]
+
+    ranked = _rank_rows(_rows("volatility", [0.9, 0.2, 0.5]), "volatility")
+    assert [r["tag"] for r in ranked] == [1, 2, 0]
+
+
+def test_rank_rows_treats_max_drawdown_as_signed():
+    # The engine reports eq/peak - 1, so -0.05 is a shallower drawdown
+    # than -0.40 and must rank first. Ranking it ascending would invert the
+    # whole leaderboard.
+    ranked = _rank_rows(_rows("max_drawdown", [-0.40, -0.05, -0.22]), "max_drawdown")
+    assert [r["tag"] for r in ranked] == [1, 2, 0]
+
+
+def test_rank_rows_pushes_missing_and_nan_last_in_both_directions():
+    ranked = _rank_rows(_rows("sharpe", [1.0, float("nan"), None, 2.0]), "sharpe")
+    assert [r["tag"] for r in ranked][:2] == [3, 0]
+    assert set(r["tag"] for r in ranked[2:]) == {1, 2}
+
+    ranked = _rank_rows(
+        _rows("ulcer_index", [0.2, float("nan"), None, 0.1]), "ulcer_index"
+    )
+    assert [r["tag"] for r in ranked][:2] == [3, 0]
+    assert set(r["tag"] for r in ranked[2:]) == {1, 2}
+
+
+def test_rank_indices_matches_row_ranking():
+    np = pytest.importorskip("numpy")
+
+    col = np.array([0.4, 2.1, 1.0])
+    assert _rank_indices(col, lower_is_better=False) == [1, 2, 0]
+    assert _rank_indices(col, lower_is_better=True) == [0, 2, 1]
+
+
+def test_rank_indices_keeps_nan_last_in_both_directions():
+    np = pytest.importorskip("numpy")
+
+    col = np.array([1.0, np.nan, 2.0])
+    assert _rank_indices(col, lower_is_better=False) == [2, 0, 1]
+    assert _rank_indices(col, lower_is_better=True) == [0, 2, 1]
 
 
 def test_build_server_registers_core_tools():

@@ -15,7 +15,23 @@ pytest.importorskip("manifoldbt")
 from manifoldbt_mcp.config_helpers import build_backtest_config, parse_interval
 from manifoldbt_mcp.dsl import compile_strategy_code
 from manifoldbt_mcp.reference import list_indicators, render_indicators_markdown
-from manifoldbt_mcp.server import build_server
+from manifoldbt_mcp.server import (
+    _combo_at,
+    _grid_size,
+    _rank_indices,
+    _rank_rows,
+    _with_defaults,
+    build_server,
+)
+
+
+def _tools(server):
+    mgr = getattr(server, "_tool_manager", None) or server.tool_manager
+    return mgr._tools
+
+
+def _rows(metric: str, values):
+    return [{"metrics": {metric: v}, "tag": i} for i, v in enumerate(values)]
 
 
 def test_parse_interval_shorthands():
@@ -85,6 +101,159 @@ def test_render_indicators_markdown_has_groups():
     assert "# manifoldbt indicator reference" in md
     assert "## Trend / Moving averages" in md
     assert "`ema" in md
+
+
+def test_rank_rows_puts_best_sharpe_first():
+    ranked = _rank_rows(_rows("sharpe", [0.4, 2.1, 1.0]), "sharpe")
+    assert [r["tag"] for r in ranked] == [1, 2, 0]
+
+
+def test_rank_rows_minimises_positive_risk_metrics():
+    # ulcer_index and volatility are positive magnitudes: smallest wins.
+    ranked = _rank_rows(_rows("ulcer_index", [0.30, 0.05, 0.12]), "ulcer_index")
+    assert [r["tag"] for r in ranked] == [1, 2, 0]
+
+    ranked = _rank_rows(_rows("volatility", [0.9, 0.2, 0.5]), "volatility")
+    assert [r["tag"] for r in ranked] == [1, 2, 0]
+
+
+def test_rank_rows_treats_max_drawdown_as_signed():
+    # The engine reports eq/peak - 1, so -0.05 is a shallower drawdown
+    # than -0.40 and must rank first. Ranking it ascending would invert the
+    # whole leaderboard.
+    ranked = _rank_rows(_rows("max_drawdown", [-0.40, -0.05, -0.22]), "max_drawdown")
+    assert [r["tag"] for r in ranked] == [1, 2, 0]
+
+
+def test_rank_rows_pushes_missing_and_nan_last_in_both_directions():
+    ranked = _rank_rows(_rows("sharpe", [1.0, float("nan"), None, 2.0]), "sharpe")
+    assert [r["tag"] for r in ranked][:2] == [3, 0]
+    assert set(r["tag"] for r in ranked[2:]) == {1, 2}
+
+    ranked = _rank_rows(
+        _rows("ulcer_index", [0.2, float("nan"), None, 0.1]), "ulcer_index"
+    )
+    assert [r["tag"] for r in ranked][:2] == [3, 0]
+    assert set(r["tag"] for r in ranked[2:]) == {1, 2}
+
+
+def test_rank_indices_matches_row_ranking():
+    np = pytest.importorskip("numpy")
+
+    col = np.array([0.4, 2.1, 1.0])
+    assert _rank_indices(col, lower_is_better=False) == [1, 2, 0]
+    assert _rank_indices(col, lower_is_better=True) == [0, 2, 1]
+
+
+def test_rank_indices_keeps_nan_last_in_both_directions():
+    np = pytest.importorskip("numpy")
+
+    col = np.array([1.0, np.nan, 2.0])
+    assert _rank_indices(col, lower_is_better=False) == [2, 0, 1]
+    assert _rank_indices(col, lower_is_better=True) == [0, 2, 1]
+
+
+def test_combo_at_matches_the_engine_enumeration():
+    # Golden sequence captured from manifoldbt 0.13.0 itself: this exact grid
+    # was swept, then each index re-run as a 1-combo sweep, and all 12
+    # final_equity values matched. Insertion order is zz-then-aa while the
+    # engine sorts alphabetically, so a decoder that trusted insertion order
+    # would transpose the whole leaderboard.
+    grid = {"zz": [50, 80, 120], "aa": [5, 10, 15, 20]}
+    decoded = [_combo_at(grid, i) for i in range(12)]
+
+    assert decoded[0] == {"aa": 5, "zz": 50}
+    assert decoded[1] == {"aa": 5, "zz": 80}
+    assert decoded[3] == {"aa": 10, "zz": 50}
+    assert decoded[11] == {"aa": 20, "zz": 120}
+    # The alphabetically last axis varies fastest.
+    assert [c["zz"] for c in decoded[:4]] == [50, 80, 120, 50]
+    assert [c["aa"] for c in decoded[:4]] == [5, 5, 5, 10]
+
+
+def test_combo_at_agrees_with_itertools_product():
+    import itertools
+
+    grid = {"beta": ["x", "y"], "alpha": [1, 2, 3], "gamma": [True, False]}
+    names = sorted(grid)
+    expected = [
+        dict(zip(names, values, strict=True))
+        for values in itertools.product(*(grid[n] for n in names))
+    ]
+    assert [_combo_at(grid, i) for i in range(len(expected))] == expected
+
+
+def test_combo_at_handles_degenerate_grids():
+    assert _combo_at({"only": [7, 8, 9]}, 2) == {"only": 9}
+    assert _combo_at({}, 0) == {}
+
+
+def test_grid_size_is_the_cartesian_product():
+    assert _grid_size({"a": [1, 2, 3], "b": [1, 2]}) == 6
+    assert _grid_size({}) == 1
+    assert _grid_size({"a": []}) == 0
+
+
+def test_sweep_result_is_iterable_and_has_no_results_attribute():
+    # run_sweep(lite=False) reads its rows by iterating the SweepResult.
+    # It used to read a .results attribute that has never existed, so every
+    # non-lite sweep died with AttributeError. Pin the contract.
+    import manifoldbt as mbt
+
+    assert not hasattr(mbt.SweepResult, "results")
+    for method in ("__iter__", "__len__", "__getitem__"):
+        assert hasattr(mbt.SweepResult, method), method
+
+
+def test_with_defaults_fills_gaps_without_overriding_the_caller():
+    # These configs go straight to the Rust deserialiser, which has no serde
+    # default for max_parallelism, so omitting it used to fail the call with
+    # "invalid json payload: missing field `max_parallelism`".
+    assert _with_defaults({"metric": "sharpe"}, {"max_parallelism": 0}) == {
+        "metric": "sharpe",
+        "max_parallelism": 0,
+    }
+    assert _with_defaults({"max_parallelism": 8}, {"max_parallelism": 0}) == {
+        "max_parallelism": 8
+    }
+    assert _with_defaults(None, {"n_paths": 1000}) == {"n_paths": 1000}
+
+
+def test_research_tools_document_the_fields_the_engine_requires():
+    # The tool description is the only contract the model sees. Following it
+    # has to be enough to make a valid call, so every required field of the
+    # Rust config struct must be named in it.
+    tools = _tools(build_server())
+    for name, required in (
+        ("run_sweep_2d", ("x_param", "x_values", "y_param", "y_values", "metric")),
+        ("run_stability", ("param_name", "values", "metric")),
+        ("run_monte_carlo", ("n_paths", "method")),
+    ):
+        description = tools[name].description
+        for field in required:
+            assert field in description, f"{name} does not document '{field}'"
+
+
+def test_list_examples_explains_itself_instead_of_returning_empty():
+    from manifoldbt_mcp import server as server_module
+
+    if server_module._EXAMPLES_DIR is not None:
+        pytest.skip("running against a source checkout that does ship examples")
+
+    # Returning [] read as "manifoldbt ships no examples", which is false.
+    with pytest.raises(ValueError, match="bundle examples"):
+        _tools(build_server())["list_examples"].fn()
+
+
+def test_strategy_authoring_resource_does_not_pose_as_the_api_tour():
+    resources = build_server()._resource_manager._resources
+    api = resources["manifoldbt://reference/api"].fn()
+    authoring = resources["manifoldbt://reference/strategy-authoring"].fn()
+
+    assert authoring != api, (
+        "the authoring resource returns the API tour verbatim while claiming "
+        "to be the authoring guide"
+    )
 
 
 def test_build_server_registers_core_tools():

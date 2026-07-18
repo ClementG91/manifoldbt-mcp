@@ -37,8 +37,8 @@ dependencies. Python 3.10+ is required.
 Optional extras:
 
 ```bash
-pip install "manifoldbt-mcp[plot]"   # matplotlib, for plot_tearsheet
-pip install "manifoldbt-mcp[dev]"    # pytest, ruff, matplotlib
+pip install "manifoldbt-mcp[plot]"   # plotly stack, for plot_tearsheet
+pip install "manifoldbt-mcp[dev]"    # pytest, ruff, plotly stack
 ```
 
 ## Run
@@ -117,14 +117,14 @@ Then connect your MCP client to `http://<host>:8765/mcp`.
 | `validate_strategy` | Validate a StrategyDef JSON through the Rust compiler. |
 | `run_backtest` | Run a single backtest and return metrics + summary. |
 | `run_batch` | Run many strategies in parallel on a shared data load. |
-| `run_sweep` | Cartesian parameter sweep, ranked by any metric. |
+| `run_sweep` | Cartesian parameter sweep, ranked by any metric. `device="auto"` dispatches large grids to the GPU. |
 | `run_sweep_2d` | 2-D parameter heatmap. |
 | `run_walk_forward` | Walk-forward optimisation (Pro). |
 | `run_stability` | Parameter stability analysis. |
 | `run_monte_carlo` | Trade-permutation Monte Carlo on a fresh backtest. |
 | `run_stochastic` | SDE path simulation (GBM, Heston, Merton, GARCH-JD, or custom). |
 | `run_portfolio` | Multi-strategy portfolio with risk rules & rebalancing. |
-| `plot_tearsheet` | Render a full tearsheet as a self-contained HTML report from a backtest. |
+| `plot_tearsheet` | Render a full tearsheet as an interactive plotly HTML report from a backtest. |
 
 ### 3 resources + 1 template
 

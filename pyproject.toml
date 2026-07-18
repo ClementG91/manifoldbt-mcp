@@ -35,7 +35,7 @@ classifiers = [
     "Topic :: Office/Business :: Financial :: Investment",
 ]
 dependencies = [
-    "manifoldbt>=0.13",
+    "manifoldbt>=0.13.1",
     "mcp>=1.2",
 ]
 
@@ -43,11 +43,13 @@ dependencies = [
 # manifoldbt 0.12.0 replaced the matplotlib tearsheet with plotly, so the
 # plotting stack has to come from manifoldbt's own extra: pulling matplotlib
 # here left plot_tearsheet without plotly and it failed on import.
-plot = ["manifoldbt[plot]>=0.13"]
+# The floor is 0.13.1 because that is where plotlyjs="inline" starts working:
+# 0.13.0 and earlier read get_plotlyjs off plotly.io, where it does not exist.
+plot = ["manifoldbt[plot]>=0.13.1"]
 dev = [
     "pytest>=7.0",
     "ruff>=0.4",
-    "manifoldbt[plot]>=0.13",
+    "manifoldbt[plot]>=0.13.1",
 ]
 
 [project.scripts]
